@@ -1,0 +1,90 @@
+# Shared OpenSSL configuration for every CA of the lab PKI.
+# The CA working directory is passed through the CA_DIR environment variable,
+# so the same file drives the Root CA, the Users CA and the Servers CA.
+#
+#   Root CA (offline)
+#   ├── Users CA    -> client certificates (issued by the backend from CSRs)
+#   └── Servers CA  -> nginx TLS server certificate
+
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir              = ${ENV::CA_DIR}
+database         = $dir/index.txt
+new_certs_dir    = $dir/newcerts
+serial           = $dir/serial
+crlnumber        = $dir/crlnumber
+certificate      = $dir/ca.crt
+private_key      = $dir/private/ca.key.pem
+default_md       = sha384
+default_days     = 365
+default_crl_days = 365
+policy           = policy_any
+preserve         = yes
+unique_subject   = no
+# Never copy extensions from a CSR: the CA decides what a certificate may do.
+copy_extensions  = none
+email_in_dn      = no
+
+[ policy_any ]
+organizationName       = optional
+organizationalUnitName = optional
+commonName             = supplied
+
+[ req ]
+distinguished_name = req_dn
+prompt             = no
+string_mask        = utf8only
+
+[ req_dn ]
+CN = placeholder
+
+# ---------------------------------------------------------------- CA profiles
+
+[ v3_root_ca ]
+basicConstraints     = critical, CA:true
+keyUsage             = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+
+[ v3_intermediate_ca ]
+# pathlen:0 -> an intermediate can only sign end-entity certificates.
+basicConstraints       = critical, CA:true, pathlen:0
+keyUsage               = critical, keyCertSign, cRLSign
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always
+
+# ------------------------------------------------------- end-entity profiles
+
+[ server_cert ]
+basicConstraints       = critical, CA:false
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = serverAuth
+subjectAltName         = DNS:localhost, IP:127.0.0.1
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid, issuer
+
+# Same profile as the certificates issued by the backend (used for the
+# "expired certificate" negative test).
+[ client_cert ]
+basicConstraints       = critical, CA:false
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = clientAuth
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid, issuer
+
+# Negative test: an S/MIME-only certificate that must not open a TLS session.
+[ wrong_eku_cert ]
+basicConstraints       = critical, CA:false
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = emailProtection
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid, issuer
+
+# Negative test: no EKU at all. OpenSSL (and therefore nginx) accepts it for
+# client authentication, the backend must reject it (defence in depth).
+[ no_eku_cert ]
+basicConstraints       = critical, CA:false
+keyUsage               = critical, digitalSignature
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid, issuer

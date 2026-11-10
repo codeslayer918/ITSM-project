@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Account</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header>
+  <h1>ITSM mTLS Lab - my account</h1>
+  <nav><a id="admin-link" href="/admin.html" hidden>Administration</a><a href="#" id="logout">Log out</a></nav>
+</header>
+<main>
+  <div id="msg" class="msg"></div>
+  <section>
+    <h2>Session</h2>
+    <table><tbody id="profile"></tbody></table>
+  </section>
+
+  <section>
+    <h2>My certificates</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Device</th><th>Serial</th><th>Status</th><th>Obtained via</th><th>Expires</th><th></th></tr></thead>
+        <tbody id="certs"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section>
+      <h2>Add a second device (backup method)</h2>
+      <p class="hint">On the other device: <code>openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem</code>
+        then <code>openssl req -new -key key.pem -subj /CN=csr -out csr.pem</code>, and paste csr.pem here.
+        The private key never leaves that device.</p>
+      <label for="device-label">Device label</label>
+      <input id="device-label" value="phone" maxlength="64">
+      <label for="device-csr">CSR (PEM)</label>
+      <textarea id="device-csr" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
+      <button id="add-device">Issue certificate</button>
+    </section>
+    <section>
+      <h2>Backup codes</h2>
+      <p class="hint">10 one-time codes, stored hashed (Argon2id). They can only enrol a new certificate if every
+        device is lost; they never log you in. Regenerating invalidates the previous codes.</p>
+      <p>Remaining: <strong id="codes-left">-</strong></p>
+      <button id="regen-codes">Generate new codes</button>
+      <pre id="codes" hidden></pre>
+    </section>
+  </div>
+  <section id="issued" hidden></section>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/dashboard.js"></script>
+</body>
+</html>

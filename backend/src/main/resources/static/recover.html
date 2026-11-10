@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Certificate Recovery</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header><h1>ITSM mTLS Lab - certificate recovery</h1><nav><a href="/enroll.html">Enrolment</a></nav></header>
+<main>
+  <section>
+    <h2>Lost every certificate?</h2>
+    <p class="hint">Completing a recovery revokes <strong>all</strong> your current certificates, closes every session
+      and sends you a notification. If you still have another enrolled device, sign in with it and revoke only the
+      lost one instead.</p>
+    <p class="hint">First generate a new key pair locally:</p>
+    <pre>openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem
+openssl req -new -key key.pem -subj /CN=csr -out csr.pem</pre>
+    <label for="label">Device label</label>
+    <input id="label" value="recovered-device" maxlength="64">
+    <label for="csr">New CSR (PEM)</label>
+    <textarea id="csr" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
+  </section>
+
+  <div class="grid">
+    <section id="with-code">
+      <h2>Option A - backup code</h2>
+      <label for="username">Username</label>
+      <input id="username" autocomplete="username">
+      <label for="code">Backup code</label>
+      <input id="code" autocomplete="off" placeholder="XXXXX-XXXXX">
+      <button id="recover-code">Recover with backup code</button>
+      <div id="msg-code" class="msg"></div>
+    </section>
+
+    <section id="with-link">
+      <h2>Option B - e-mail link</h2>
+      <p class="hint">Not available for administrator accounts.</p>
+      <div id="request-link-box">
+        <label for="email">Registered e-mail</label>
+        <input id="email" type="email" autocomplete="email">
+        <button id="request-link">Send me a recovery link</button>
+      </div>
+      <div id="complete-link-box" hidden>
+        <p>Recovery link detected. Paste your new CSR above, then:</p>
+        <button id="complete-link">Complete recovery</button>
+      </div>
+      <div id="msg-link" class="msg"></div>
+    </section>
+  </div>
+  <section id="issued" hidden></section>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/recover.js"></script>
+</body>
+</html>

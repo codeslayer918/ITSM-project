@@ -1,0 +1,88 @@
+name: itsm-mtls
+
+# Run ./scripts/setup.sh first: it creates the PKI (pki/out) and the .env file.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mtls
+      POSTGRES_USER: mtls
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/setup.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mtls -d mtls"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Fake SMTP server + web UI (http://localhost:8025) to read magic links and notifications.
+  mail:
+    image: axllent/mailpit:v1.21
+    networks: [internal, edge]
+    ports:
+      - "127.0.0.1:8025:8025"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/mtls
+      DB_USER: mtls
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOST: mail
+      MAIL_PORT: "1025"
+      PROXY_SHARED_SECRET: ${PROXY_SHARED_SECRET:?run scripts/setup.sh}
+      BOOTSTRAP_ADMIN_TOKEN: ${BOOTSTRAP_ADMIN_TOKEN:?run scripts/setup.sh}
+      PUBLIC_BASE_URL: https://localhost:9443
+    secrets:
+      - users_ca_pass
+    volumes:
+      # Users CA only. The Root CA private key is never mounted anywhere (offline root).
+      - ./pki/out/users-ca/ca.crt:/pki/users-ca/ca.crt:ro
+      - ./pki/out/users-ca/private/ca.key.pem:/pki/users-ca/ca.key.pem:ro
+      - ./pki/out/users-ca/chain.pem:/pki/users-ca/chain.pem:ro
+      - ./pki/out/root-ca/ca.crl.pem:/pki/root-ca/ca.crl.pem:ro
+      - crl:/var/lib/mtls/crl
+    networks: [internal]
+    depends_on:
+      db:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    restart: unless-stopped
+
+  nginx:
+    build: ./nginx
+    environment:
+      PROXY_SHARED_SECRET: ${PROXY_SHARED_SECRET}
+    ports:
+      - "8443:8443"   # application (mutual TLS)
+      - "9443:9443"   # enrolment / recovery / CRL (no client certificate)
+    volumes:
+      - ./pki/out/server/server-fullchain.crt:/etc/nginx/pki/server-fullchain.crt:ro
+      - ./pki/out/server/server.key:/etc/nginx/pki/server.key:ro
+      - ./pki/out/nginx/client-trust.pem:/etc/nginx/pki/client-trust.pem:ro
+      - crl:/etc/nginx/crl:ro
+    networks: [internal, edge]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  users_ca_pass:
+    file: ./pki/out/users-ca/private/ca.pass
+
+volumes:
+  pgdata:
+  crl:
+
+networks:
+  # No route to the outside: the backend and the database are only reachable through nginx.
+  internal:
+    internal: true
+  edge: {}

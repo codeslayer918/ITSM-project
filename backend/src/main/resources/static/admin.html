@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mTLS Administration</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header>
+  <h1>ITSM mTLS Lab - administration</h1>
+  <nav><a href="/dashboard.html">My account</a><a href="#" id="logout">Log out</a></nav>
+</header>
+<main>
+  <div id="msg" class="msg"></div>
+
+  <div class="grid">
+    <section>
+      <h2>Create a user</h2>
+      <p class="hint">Creates the account and a single-use enrolment invitation (24 h), also sent by e-mail.
+        The group becomes the OU of the user's certificates.</p>
+      <label for="new-username">Username</label>
+      <input id="new-username" placeholder="alice">
+      <label for="new-email">E-mail</label>
+      <input id="new-email" placeholder="alice@example.test">
+      <label for="new-group">Group</label>
+      <input id="new-group" placeholder="staff">
+      <button id="create-user">Create and invite</button>
+      <pre id="invite" hidden></pre>
+    </section>
+
+    <section>
+      <h2>Revoke a whole group</h2>
+      <p class="hint">Revokes every active certificate whose OU is the group (CRL + application list) and closes
+        the members' sessions.</p>
+      <label for="group-name">Group</label>
+      <select id="group-name"></select>
+      <label for="group-reason">Reason</label>
+      <select id="group-reason">
+        <option value="AFFILIATION_CHANGED">affiliationChanged</option>
+        <option value="KEY_COMPROMISE">keyCompromise</option>
+        <option value="CESSATION_OF_OPERATION">cessationOfOperation</option>
+      </select>
+      <label><input type="checkbox" id="group-disable"> Also disable the accounts (blocks recovery)</label>
+      <button id="revoke-group" class="danger">Revoke group</button>
+    </section>
+  </div>
+
+  <section>
+    <h2>Users</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>User</th><th>E-mail</th><th>Group</th><th>Role</th><th>Status</th><th>Active certs</th><th>Backup codes</th><th>Actions</th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Certificates</h2>
+    <p class="hint">Revocation is effective immediately in the application, and at the TLS layer as soon as nginx
+      reloads the new CRL (a few seconds). <button id="publish-crl" class="small">Regenerate CRL now</button></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Group (OU)</th><th>Device</th><th>Serial</th><th>Status</th><th>Via</th><th>Expires</th><th></th></tr></thead>
+        <tbody id="certs"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Audit log (latest 200)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>User</th><th>IP</th><th>Serial</th><th>Details</th></tr></thead>
+        <tbody id="audit"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/admin.js"></script>
+</body>
+</html>

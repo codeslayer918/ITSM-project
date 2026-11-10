@@ -1,0 +1,16 @@
+# Secrets and generated material - never commit
+.env
+pki/out/
+clients/
+
+# Build output
+backend/target/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Report build dependencies
+docs/report/node_modules/
+~$*.docx

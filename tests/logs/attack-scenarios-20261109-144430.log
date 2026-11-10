@@ -1,0 +1,211 @@
+
+==================================================================
+0. Preparation
+==================================================================
+Users: erin-144430, frank-144430 (staff), dave-144430 (contractors)
+
+==================================================================
+A1. Elevation: a CSR that asks for CN=admin, OU=admins and CA:true
+==================================================================
+$ bash -c openssl req -in clients/attack-144430/evil/csr.pem -noout -subject -text | grep -E 'subject=|CA:|Certificate Sign'
+                    CA:TRUE
+                    Certificate Sign
+subject=O = ITSM mTLS Lab, OU = admins, CN = admin
+
+$ bash -c openssl x509 -in clients/attack-144430/evil/cert.pem -noout -subject -ext basicConstraints,keyUsage,extendedKeyUsage
+subject=O = ITSM mTLS Lab, OU = staff, CN = mallory-144430
+X509v3 Basic Constraints: critical
+    CA:FALSE
+X509v3 Key Usage: critical
+    Digital Signature
+X509v3 Extended Key Usage: 
+    TLS Web Client Authentication
+>>> PASS: the CA ignores the requested subject (CN/OU come from the account)
+>>> PASS: the CA ignores the requested CA:true
+$ mtls clients/attack-144430/evil -b clients/attack-144430/evil.jar https://localhost:8443/api/admin/users
+HTTP/2 403 
+{"error":"admin_required","message":"An administrator certificate (OU=admins) is required."}
+>>> PASS: no admin access with the forged request
+
+==================================================================
+A2. Spoofing: inject X-SSL-Client-* / X-Proxy-Secret headers on the mTLS listener
+==================================================================
+$ mtls clients/attack-144430/erin -H X-SSL-Client-Cert: -----BEGIN%20CERTIFICATE-----%0AMIICvzCCAkSgAwIBAgIQNSyfMCr0vPFgsrqnuADEYDAKBggqhkjOPQQDAzBFMRYw%0AFAYDVQQKDA1JVFNNIG1UTFMgTGFiMQ4wDAYDVQQLDAVVc2VyczEbMBkGA1UEAwwS%0ASVRTTSBtVExTIFVzZXJzIENBMB4XDTI2MTEwOTEyMTAzMVoXDTI3MDUwODEyMTUz%0AMVowOTEWMBQ...
+{"admin":false,"message":"Logged in with client certificate CN=erin-144430,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"291C55373695BE423C380CDCC8AB2CDB","username":"erin-144430"}
+>>> PASS: nginx overwrites the injected headers: still logged in as erin
+
+==================================================================
+A3. Bypass nginx: talk to the backend directly from inside the Docker network
+==================================================================
+$ docker compose exec -T nginx wget -S -O- --header X-Auth-Listener: mtls --header X-SSL-Client-Verify: SUCCESS http://backend:8080/api/me
+Connecting to backend:8080 (172.19.0.4:8080)
+  HTTP/1.1 403 
+wget: server returned error: HTTP/1.1 403 
+>>> PASS: backend refuses requests without the proxy secret
+$ bash -c curl -sS -m 3 http://localhost:8080/ 2>&1; docker compose port backend 8080 2>&1
+curl: (7) Failed to connect to localhost port 8080 after 0 ms: Connection refused
+invalid IP:0
+>>> PASS: backend port not published on the host
+
+==================================================================
+A4. Replay an enrolment invitation token
+==================================================================
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/enroll -H Content-Type: application/json -d {"token": "PvZf3MQZa6GzPyT8U41qLHc-2FmROzXbM7KLDdJWMwg", "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHHMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAERLsN1ay5RI86jBqaoi0lhuYalnQAycsHogCGt0uPrEhKVoPLVIZy8xwP1uN+\nFex2RF2CkvqrHua3DyOp99J6uKAAMAoGCCqGSM49BAMCA0cAMEQCIBxStv9VWCqS\nDpBzFSKFNviYkfqEmvp7Xi20IXBhzS+EAiAkuufry6pNmJB/wcQRWC0AS6c1SSbM\noYo7uhWAqNNSlg==\n-----END CERTIFICATE REQUEST-----\n"}
+{"message":"Invalid or expired enrolment token.","error":"invalid_token"}
+>>> PASS: a used invitation token cannot be replayed
+
+==================================================================
+A5. Re-certify an already certified key pair (e.g. a key known to be compromised)
+==================================================================
+$ curl -sS --cacert pki/out/root-ca/ca.crt --cert clients/attack-144430/erin/cert.pem --key clients/attack-144430/erin/key.pem -b clients/attack-144430/erin.jar -X POST https://localhost:8443/api/me/certificates -H Content-Type: application/json -d {"csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHHMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAECzqm5cLr8Jfyq5MuiDf1n7dL34Vs67G/UwmKycQXj5GhTcqvAA+VYW/O/rdw\n/e0v9quXWDpn3CPllJjg3yASDaAAMAoGCCqGSM49BAMCA0cAMEQCIF3YF7oRdnOi\nUhrFpz/1BeGAcSGhm3znmwTcmeslTknIAiBDSJ3G/fxyfHcsMiU+sqUR/mYjNxqP\nSkvsg3L9ia8Hug==\n-----END CERTIFICATE REQUEST-----\n", "label": "reuse"}
+{"message":"This key pair was already certified. Generate a new key.","error":"key_reuse"}
+>>> PASS: key reuse is refused
+
+==================================================================
+A6. Malformed / weak CSRs
+==================================================================
+$ curl -sS --cacert pki/out/root-ca/ca.crt --cert clients/attack-144430/erin/cert.pem --key clients/attack-144430/erin/key.pem -b clients/attack-144430/erin.jar -X POST https://localhost:8443/api/me/certificates -H Content-Type: application/json -d {"csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIIBSzCBtQIBADAMMQowCAYDVQQDDAF4MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCB\niQKBgQDV3o6NQNFZDGAigPSP1rBC/ln/GqzydF1heKdGbENimHYEnLKYn/60enZ7\nHMDr2//NMlyrw+98Yw0uyrRdE0Ty+X3FCVf1ILWrJLEPhDcGjWocj9u9zQqOfYkI\nheHlzaeXojFk07aBcOVLEnojlafNcnXT8Gzp7dQvsSExpCLs5QIDAQABoAAwDQYJ\nKoZIhvcNAQELBQADgYEAZnlZVjaVtdpZmZbJZ/AIuuBJ4gsMiXSVXnO+9gUvuP/w\n9ubyj6UWcwThPTlMAoqkjAtbKVGsovs1DziRyhyzoz5rD1dbJWMKrOHMKmcJR3cV\nQNbf2hYu/5KZRnDdXntxJxTjln8BxQF1+hqSu4F0bxmGI3v06n7au5ik+Sfr95k=\n-----END CERTIFICATE REQUEST-----\n"}
+{"message":"RSA keys must be between 2048 and 8192 bits.","error":"invalid_csr"}
+>>> PASS: RSA-1024 key refused
+$ curl -sS --cacert pki/out/root-ca/ca.crt --cert clients/attack-144430/erin/cert.pem --key clients/attack-144430/erin/key.pem -b clients/attack-144430/erin.jar -X POST https://localhost:8443/api/me/certificates -H Content-Type: application/json -d {"csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHHMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAEVO79PD6xi3hHZ59RMd/sN7e5mJQn6ONu2kr9v9y4c7Cc0rITUp6GTWbIPy2V\nfM9cRLtndAq4vxxvOKulIiI9SaAAMAoGCCqGSM49BAMCA0cAMEQCIFS5P7W6ySHG\n/+WNDQuj7YZWuv/iIS+BgAnxb2r7cxIVAiBnJLofHDBpdp5zTwqVzHAJUujBlRWh\nme3ndiIAWBQANw==\n-----END CERTIFICATE REQUEST-----\n"}
+{"message":"The CSR signature is invalid (proof of possession failed).","error":"invalid_csr"}
+>>> PASS: CSR without valid proof of possession refused
+
+==================================================================
+A7. Race condition: the same backup code sent twice in parallel
+==================================================================
+request 2 -> HTTP 401
+request 1 -> HTTP 200
+{"serial":"11A8B123F4B0D545EB91B6E14345C8D5","notAfter":"2027-05-08T12:44:46Z","subject":"CN=frank-144430,OU=staff,O=ITSM mTLS Lab","certificatePem":"-----BEGIN
+successful recoveries: 1
+>>> PASS: a backup code is consumed exactly once under concurrency
+
+==================================================================
+A8. A disabled account cannot self-recover, even with a valid backup code
+==================================================================
+$ admin -X POST https://localhost:8443/api/admin/users/dave-144430/revoke -d {"reason":"AFFILIATION_CHANGED","disableAccount":true}
+{"revokedCertificates":1,"affectedAccounts":1,"accountsDisabled":true}
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/recovery/backup-code -H Content-Type: application/json -d {"username": "dave-144430", "backupCode": "BBHX4-6WEP5", "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHHMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAELzq8g+2yP4RxEON95Z+lq/GZRRRMpflw4YfXj9CyyXPhZ5MsaOH6Kgz0b4jq\nrQhad4PBSxYlnwJaAFgx8zM3I6AAMAoGCCqGSM49BAMCA0cAMEQCICxRX0N+aoAz\niokTaG95X32QC4FPF2vGFGkLbq+EjoNLAiA22XaVoE0tZBcklWW3pJ76hrMKOZZo\nBsUK2ag0+l75VQ==\n-----END CERTIFICATE REQUEST-----\n"}
+{"message":"Invalid username or backup code.","error":"invalid_credentials"}
+>>> PASS: recovery refused for a disabled account (generic error)
+
+==================================================================
+A9. Account enumeration: response time, existing vs unknown username
+==================================================================
+mean response time: existing user = 384 ms, unknown user = 361 ms
+relative difference: 5 %
+>>> PASS: no exploitable timing difference (< 25 %)
+unknown user answer : {"message":"Invalid username or backup code.","error":"invalid_credentials"}
+>>> PASS: same error message for unknown users
+--- A9b. same question on the magic-link endpoint (finding F2, fixed with MagicLinkWorker)
+existing=0.011139s unknown=0.014158s
+existing=0.013089s unknown=0.013004s
+existing=0.015202s unknown=0.013139s
+mean: existing=13 ms unknown=13 ms
+>>> PASS: magic-link answers in the same time for existing and unknown e-mails (< 20 ms apart)
+
+==================================================================
+A10. IDOR: erin tries to revoke frank's certificate through her own endpoint
+==================================================================
+$ mtls clients/attack-144430/erin -b clients/attack-144430/erin.jar -X POST https://localhost:8443/api/me/certificates/11A8B123F4B0D545EB91B6E14345C8D5/revoke -H Content-Type: application/json -d {}
+HTTP/2 404 
+{"message":"Unknown certificate.","error":"not_found"}
+>>> PASS: cannot revoke another user's certificate
+
+==================================================================
+A11. Session termination: logout (ASVS 7.4.1) and account disabled (ASVS 7.4.2)
+==================================================================
+$ mtls clients/attack-144430/erin -b clients/attack-144430/erin2.jar -X POST https://localhost:8443/api/logout -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict
+{"message":"Logged out."}
+
+$ mtls clients/attack-144430/erin -H Cookie: __Host-SID=A99C24D1CC70B67C93338FF668C47996 https://localhost:8443/api/me
+HTTP/2 401 
+{"error":"not_authenticated","message":"No session: POST /api/login first."}
+>>> PASS: a logged-out session id cannot be reused
+$ mtls clients/attack-144430/erin -b clients/attack-144430/erin2.jar https://localhost:8443/api/me
+HTTP/2 403 
+{"error":"certificate_revoked","message":"This certificate has been revoked."}
+>>> PASS: disabling the account ends its active sessions
+
+==================================================================
+A12. Lock-out abuse: revoke the whole admins group
+==================================================================
+$ admin -X POST https://localhost:8443/api/admin/groups/admins/revoke -d {}
+{"message":"Revoking the whole admins group would lock every administrator out. Revoke admins one by one.","error":"self_lockout"}
+>>> PASS: revoking every administrator at once is refused
+
+==================================================================
+A13. E-mail takeover of an administrator: magic link for the admin address
+==================================================================
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/recovery/magic-link -H Content-Type: application/json -d {"email":"admin@itsm-mtls.local"}
+{"message":"If an account exists for this address, a recovery link has been sent."}
+recovery e-mails to admin before=0 after=0
+>>> PASS: no magic link is ever sent to an administrator
+
+==================================================================
+A14. Stale CRL (DoS / tampering): nginx must fail closed
+==================================================================
+$ bash -c openssl crl -in clients/attack-144430/short.crl.pem -noout -lastupdate -nextupdate
+lastUpdate=Nov  9 12:44:52 2026 GMT
+nextUpdate=Nov  9 12:44:53 2026 GMT
+
+nginx-1  | [crl-watch] 2026-11-09T12:44:54Z CRL changed, nginx reloaded
+$ mtls clients/admin -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:CRL has expired"}
+>>> PASS: expired CRL: every client certificate is rejected (fail closed)
+--- restore: the backend republishes a fresh CRL at start-up
+$ mtls clients/admin -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=00FE6623989196C96A44644A5E7A2A05; Path=/; Secure; HttpOnly; SameSite=Strict
+{"group":"admins","message":"Logged in with client certificate CN=admin,OU=admins,O=ITSM mTLS Lab","admin":true,"username":"admin","certificateSerial":"352C9F302AF4BCF160B2BAA7B800C460"}
+>>> PASS: service restored with a fresh CRL
+
+==================================================================
+A15. Repudiation: every attack above left a trace
+==================================================================
+>>> PASS: audit contains ADMIN_ACCESS_DENIED
+>>> PASS: audit contains ENROLLMENT_FAILED
+>>> PASS: audit contains RECOVERY_FAILED
+>>> PASS: audit contains USER_REVOKED
+>>> PASS: audit contains BACKUP_CODE_USED
+>>> PASS: audit contains RECOVERY_LINK_REQUESTED FAILURE admin
+--- no secret in the logs (backup code of frank must not appear):
+>>> PASS: backup codes never logged
+
+==================================================================
+SUMMARY
+==================================================================
+PASS  the CA ignores the requested subject (CN/OU come from the account)
+PASS  the CA ignores the requested CA:true
+PASS  no admin access with the forged request
+PASS  nginx overwrites the injected headers: still logged in as erin
+PASS  backend refuses requests without the proxy secret
+PASS  backend port not published on the host
+PASS  a used invitation token cannot be replayed
+PASS  key reuse is refused
+PASS  RSA-1024 key refused
+PASS  CSR without valid proof of possession refused
+PASS  a backup code is consumed exactly once under concurrency
+PASS  recovery refused for a disabled account (generic error)
+PASS  no exploitable timing difference (< 25 %)
+PASS  same error message for unknown users
+PASS  magic-link answers in the same time for existing and unknown e-mails (< 20 ms apart)
+PASS  cannot revoke another user's certificate
+PASS  a logged-out session id cannot be reused
+PASS  disabling the account ends its active sessions
+PASS  revoking every administrator at once is refused
+PASS  no magic link is ever sent to an administrator
+PASS  expired CRL: every client certificate is rejected (fail closed)
+PASS  service restored with a fresh CRL
+PASS  audit contains ADMIN_ACCESS_DENIED
+PASS  audit contains ENROLLMENT_FAILED
+PASS  audit contains RECOVERY_FAILED
+PASS  audit contains USER_REVOKED
+PASS  audit contains BACKUP_CODE_USED
+PASS  audit contains RECOVERY_LINK_REQUESTED FAILURE admin
+PASS  backup codes never logged
+PASS=29 FAIL=0
+Log written to tests/logs/attack-scenarios-20261109-144430.log

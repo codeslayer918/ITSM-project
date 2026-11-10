@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Certificate Enrolment</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header><h1>ITSM mTLS Lab - enrol your certificate</h1><nav><a href="/recover.html">Lost certificate?</a></nav></header>
+<main>
+  <section>
+    <h2>1. Generate your key pair locally</h2>
+    <p class="hint">The private key is created on your machine and never sent to the server. Only the CSR (public key +
+      signature proving you own the private key) is uploaded. The subject of the CSR is ignored: the CA uses your account.</p>
+    <pre>openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem
+openssl req -new -key key.pem -subj /CN=csr -out csr.pem</pre>
+    <p class="hint">Or do everything at once: <code>./scripts/enroll.sh --token &lt;token&gt; --out clients/&lt;you&gt;</code></p>
+  </section>
+  <section>
+    <h2>2. Submit the CSR with your invitation token</h2>
+    <label for="token">Enrolment token</label>
+    <input id="token" autocomplete="off">
+    <label for="label">Device label</label>
+    <input id="label" value="laptop" maxlength="64">
+    <label for="csr">CSR (PEM)</label>
+    <textarea id="csr" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
+    <button id="submit">Request certificate</button>
+    <div id="msg" class="msg"></div>
+  </section>
+  <section id="issued" hidden></section>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/enroll.js"></script>
+</body>
+</html>

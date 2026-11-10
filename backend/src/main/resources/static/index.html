@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mTLS Sign-in</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header><h1>ITSM mTLS Lab</h1></header>
+<main>
+  <section>
+    <h2>Sign in with your client certificate</h2>
+    <p class="hint">Your browser already presented its X.509 certificate during the TLS handshake (nginx checked the
+      chain, the validity period, the CRL and the clientAuth usage). Signing in maps that certificate to your account
+      and opens a session bound to it.</p>
+    <button id="login">Sign in</button>
+    <div id="msg" class="msg"></div>
+  </section>
+  <section>
+    <h2>Lost your certificate?</h2>
+    <p class="hint">Use a backup code or a recovery e-mail on the public recovery page:
+      <a href="https://localhost:9443/recover.html">https://localhost:9443/recover.html</a></p>
+  </section>
+</main>
+<script src="/assets/common.js"></script>
+<script src="/assets/index.js"></script>
+</body>
+</html>

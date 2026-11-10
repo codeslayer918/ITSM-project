@@ -1,0 +1,81 @@
+server:
+  port: 8080
+  # Only nginx talks to the backend; it is the TLS terminator.
+  forward-headers-strategy: none
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-exception: false
+  servlet:
+    session:
+      timeout: 15m                 # idle timeout
+      tracking-modes: cookie       # never put the session id in URLs
+      cookie:
+        name: __Host-SID           # __Host- prefix: Secure, Path=/, no Domain
+        http-only: true
+        secure: true
+        same-site: strict
+        path: /
+
+spring:
+  application:
+    name: mtls-auth
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://db:5432/mtls}
+    username: ${DB_USER:mtls}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none   # the schema is owned by Flyway
+  flyway:
+    enabled: true
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+  mail:
+    host: ${MAIL_HOST:mail}
+    port: ${MAIL_PORT:1025}
+  threads:
+    virtual:
+      enabled: true
+
+app:
+  public-base-url: ${PUBLIC_BASE_URL:https://localhost:9443}
+  allowed-origins: ${ALLOWED_ORIGINS:https://localhost:8443,https://localhost:9443}
+  proxy-secret: ${PROXY_SHARED_SECRET:}
+  mail-from: no-reply@itsm-mtls.local
+  session-absolute-timeout: 4h
+  pki:
+    organization: ITSM mTLS Lab
+    users-ca-cert: /pki/users-ca/ca.crt
+    users-ca-key: /pki/users-ca/ca.key.pem
+    users-ca-key-passphrase-file: /run/secrets/users_ca_pass
+    users-ca-chain: /pki/users-ca/chain.pem
+    root-ca-crl: /pki/root-ca/ca.crl.pem
+    crl-bundle-output: /var/lib/mtls/crl/crl-bundle.pem
+    crl-distribution-url: ${PUBLIC_BASE_URL:https://localhost:9443}/crl/users-ca.crl
+    client-cert-validity: 180d
+    crl-validity: 24h
+    max-active-certificates: 3
+  tokens:
+    enrollment-validity: 24h
+    magic-link-validity: 15m
+  bootstrap:
+    admin-username: admin
+    admin-email: admin@itsm-mtls.local
+    admin-token: ${BOOTSTRAP_ADMIN_TOKEN:}
+  rate-limit:
+    recovery-per-ip: 20          # spraying many accounts from one IP
+    recovery-per-account: 5      # brute force on one account (also caps Argon2 CPU cost)
+    recovery-window: 15m
+    magic-link-per-email: 3
+    magic-link-window: 1h
+    enroll-per-ip: 10
+    enroll-window: 15m
+
+logging:
+  level:
+    root: INFO
+    AUDIT: INFO

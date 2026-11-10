@@ -1,0 +1,338 @@
+
+==================================================================
+0. Preparation
+==================================================================
+Restarting the backend (resets in-memory rate limits and sessions)...
+Test users: alice-022122 (staff), bob-022122, carol-022122 (interns), revoked-022122 (staff)
+
+==================================================================
+1. No client certificate -> rejected
+==================================================================
+$ req -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_required","reason":"no client certificate was sent"}
+>>> PASS: no certificate is rejected (403 client_certificate_required)
+$ bash -c openssl s_client -connect localhost:8443 -CAfile pki/out/root-ca/ca.crt -servername localhost -brief </dev/null 2>&1 | head -12
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_256_GCM_SHA384
+Requested Signature Algorithms: ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:Ed25519:Ed448:0x1A+0x08:0x1B+0x08:0x1C+0x08:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:ECDSA+SHA224:RSA+SHA224
+Peer certificate: O = ITSM mTLS Lab, CN = localhost
+Hash used: SHA256
+Signature type: ECDSA
+Verification: OK
+Server Temp Key: X25519, 253 bits
+DONE
+
+==================================================================
+2. Certificate signed by another CA (same DN as our root!) -> rejected
+==================================================================
+$ bash -c openssl x509 -in pki/out/test-certs/rogue-user.crt -noout -subject -issuer
+subject=O = ITSM mTLS Lab, OU = admins, CN = admin
+issuer=O = ITSM mTLS Lab, CN = ITSM mTLS Root CA
+$ req --cert pki/out/test-certs/rogue-user.crt --key pki/out/test-certs/rogue-user.key -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:unable to verify the first certificate"}
+>>> PASS: foreign CA is rejected by nginx
+
+==================================================================
+3. Expired certificate -> rejected
+==================================================================
+$ bash -c openssl x509 -in pki/out/test-certs/expired.crt -noout -subject -dates
+subject=O = ITSM mTLS Lab, OU = staff, CN = expired-user
+notBefore=Jan  1 00:00:00 2025 GMT
+notAfter=Feb  1 00:00:00 2025 GMT
+$ req --cert pki/out/test-certs/expired.crt --key pki/out/test-certs/expired.key -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:certificate has expired"}
+>>> PASS: expired certificate is rejected
+$ bash -c printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | openssl s_client -connect localhost:8443 -CAfile pki/out/root-ca/ca.crt -servername localhost -cert pki/out/test-certs/expired.crt -key pki/out/test-certs/expired.key -quiet 2>&1 | tail -3
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+
+{"error":"client_certificate_rejected","reason":"FAILED:certificate has expired"}
+
+==================================================================
+4. Revoked certificate -> rejected (application list immediately, then CRL in nginx)
+==================================================================
+$ mtls clients/test-022122/revoked -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=A2C50A203EE10EC2F0E4FD089B133369; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"revoked-022122","admin":false,"message":"Logged in with client certificate CN=revoked-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"7D33D35E3A90AB6A139BF1F1818434AF"}
+>>> PASS: certificate accepted before revocation
+HTTP/2 200 
+{"message":"Certificate revoked."}
+$ mtls clients/test-022122/revoked -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"certificate_revoked","message":"This certificate has been revoked."}
+>>> PASS: revoked certificate rejected by the application (before CRL reload)
+nginx-1  | [crl-watch] 2026-11-10T00:21:31Z CRL changed, nginx reloaded
+nginx-1  | [crl-watch] 2026-11-10T00:21:43Z CRL changed, nginx reloaded
+$ bash -c curl -sS --cacert pki/out/root-ca/ca.crt https://localhost:9443/crl/users-ca.crl | openssl crl -inform DER -noout -text | grep -A2 -E 'Serial Number: 7D33D35E3A90AB6A139BF1F1818434AF|CRL Number' | head -8
+            X509v3 CRL Number: 
+                47
+Revoked Certificates:
+--
+    Serial Number: 7D33D35E3A90AB6A139BF1F1818434AF
+        Revocation Date: Nov 10 00:21:41 2026 GMT
+        CRL entry extensions:
+$ mtls clients/test-022122/revoked -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:certificate revoked"}
+>>> PASS: revoked certificate rejected by nginx (CRL)
+
+==================================================================
+5. Wrong EKU (emailProtection, no clientAuth) -> rejected
+==================================================================
+$ bash -c openssl x509 -in pki/out/test-certs/wrong-eku.crt -noout -ext extendedKeyUsage
+X509v3 Extended Key Usage: 
+    E-mail Protection
+$ req --cert pki/out/test-certs/wrong-eku.crt --key pki/out/test-certs/wrong-eku.key -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:unsuitable certificate purpose"}
+>>> PASS: wrong EKU rejected by nginx
+--- 5b. No EKU at all: OpenSSL/nginx accept it, the backend must reject it
+$ req --cert pki/out/test-certs/no-eku.crt --key pki/out/test-certs/no-eku.key -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_wrong_eku","message":"The client certificate is not allowed for TLS client authentication (EKU clientAuth missing)."}
+>>> PASS: certificate without EKU rejected by the backend
+
+==================================================================
+6. Recovery (reset) with a backup code
+==================================================================
+HTTP 200
+{'serial': '337390C4E9CF38709025E303679629E9', 'subject': 'CN=alice-022122,OU=staff,O=ITSM mTLS Lab', 'message': 'Certificate issued. 1 previous certificate(s) revoked, all sessions closed. Backup codes left: 9.', 'error': None}
+$ mtls clients/test-022122/alice-new -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=34F4EE340BB9A71872964B419CF4AB5A; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"alice-022122","admin":false,"message":"Logged in with client certificate CN=alice-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"337390C4E9CF38709025E303679629E9"}
+>>> PASS: new certificate works after recovery
+$ mtls clients/test-022122/alice -b clients/test-022122/alice.jar https://localhost:8443/api/me
+HTTP/2 403 
+{"error":"certificate_revoked","message":"This certificate has been revoked."}
+>>> PASS: old session invalidated after recovery
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/recovery/backup-code -H Content-Type: application/json -d {"username": "alice-022122", "backupCode": "4C9CZ-NTS7R", "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHIMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAEc5b1NkeP+KJ96DiyBygQ84a4Um313BNURyMTqVZ7tsflsyfF0JS6tm4loiFu\nXjRWjGpTNqJ1Gkw3P5OsKVA4BKAAMAoGCCqGSM49BAMCA0gAMEUCIQD142enamdb\nGQK+ckxRxT9y399CNDPFHJ95RUQAv8ODzAIgLqAx8YmcWvEu2pG2sztZMMpvazst\nbRw7est8BzpRd68=\n-----END CERTIFICATE REQUEST-----\n", "label": "alice-new"}
+{"error":"invalid_credentials","message":"Invalid username or backup code."}
+>>> PASS: a backup code works only once
+--- notification sent to the user (Mailpit):
+ - alice-022122@example.test | [ITSM mTLS] Your certificates were reset
+ - alice-022122@example.test | [ITSM mTLS] New certificate issued
+
+==================================================================
+7. Recovery with a magic link (e-mail, single use, 15 min)
+==================================================================
+HTTP/2 202 
+{"message":"If an account exists for this address, a recovery link has been sent."}
+HTTP/2 202 
+{"message":"If an account exists for this address, a recovery link has been sent."}
+>>> PASS: same answer whether the e-mail exists or not
+token read from Mailpit (truncated): PsGd6DE6...
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/recovery/magic-link/complete -H Content-Type: application/json -d {"token": "PsGd6DE69WryZUdhqSDIrG0xkoGEO5QT8lUSYkXbktA", "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHIMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAEdRd94A5KSKD8fMwo6wQY6oiQHCKgIeTn23QGgL6ISoEbQBXiF78EKmn8QH6q\nnW67QQ0bQN5nAPOw15jPLvAPMaAAMAoGCCqGSM49BAMCA0gAMEUCIGwj+n/4YUq6\nMie6PvzjqmrKwUn2Ed5Q5OoCk3a92bagAiEA0mdMx+m1i/QVVgtli/Jgk0hzviNJ\nFB02swnKd8NK690=\n-----END CERTIFICATE REQUEST-----\n", "label": "bob-new"} -o clients/test-022122/bob-new/resp.json -w HTTP %{http_code}\n
+HTTP 200
+>>> PASS: magic link completes the reset
+$ curl -sS --cacert pki/out/root-ca/ca.crt -X POST https://localhost:9443/api/recovery/magic-link/complete -H Content-Type: application/json -d {"token": "PsGd6DE69WryZUdhqSDIrG0xkoGEO5QT8lUSYkXbktA", "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIHIMHACAQAwDjEMMAoGA1UEAwwDY3NyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD\nQgAEdRd94A5KSKD8fMwo6wQY6oiQHCKgIeTn23QGgL6ISoEbQBXiF78EKmn8QH6q\nnW67QQ0bQN5nAPOw15jPLvAPMaAAMAoGCCqGSM49BAMCA0gAMEUCIGwj+n/4YUq6\nMie6PvzjqmrKwUn2Ed5Q5OoCk3a92bagAiEA0mdMx+m1i/QVVgtli/Jgk0hzviNJ\nFB02swnKd8NK690=\n-----END CERTIFICATE REQUEST-----\n", "label": "bob-new"}
+{"error":"invalid_token","message":"Invalid or expired recovery link."}
+>>> PASS: magic link is single use
+HTTP/2 202 
+{"message":"If an account exists for this address, a recovery link has been sent."}
+(administrators get the same answer but no e-mail: they must use a backup code)
+
+==================================================================
+8. Rate limiting on the reset endpoint (5 attempts / 15 min per account, 20 per IP)
+==================================================================
+attempt 1: HTTP/2 401   {"error":"invalid_credentials","message":"Invalid username or backup code."}
+attempt 2: HTTP/2 401   {"error":"invalid_credentials","message":"Invalid username or backup code."}
+attempt 3: HTTP/2 401   {"error":"invalid_credentials","message":"Invalid username or backup code."}
+attempt 4: HTTP/2 401   {"error":"invalid_credentials","message":"Invalid username or backup code."}
+attempt 5: HTTP/2 401   {"error":"invalid_credentials","message":"Invalid username or backup code."}
+attempt 6: HTTP/2 429  retry-after: 895  {"error":"rate_limited","message":"Too many attempts, try again later."}
+attempt 7: HTTP/2 429  retry-after: 895  {"error":"rate_limited","message":"Too many attempts, try again later."}
+>>> PASS: brute force on backup codes is throttled (429 + Retry-After)
+
+==================================================================
+9. Session id regenerated at login (session fixation)
+==================================================================
+$ mtls clients/test-022122/alice-new -c clients/test-022122/alice-new.jar -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=886FCA91C0F66FF309723754839AAF8D; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"alice-022122","admin":false,"message":"Logged in with client certificate CN=alice-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"337390C4E9CF38709025E303679629E9"}
+$ mtls clients/test-022122/alice-new -b clients/test-022122/alice-new.jar -c clients/test-022122/alice-new.jar -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=CA404C15A91156B1F157F720EDBDB50F; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"alice-022122","admin":false,"message":"Logged in with client certificate CN=alice-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"337390C4E9CF38709025E303679629E9"}
+session before: 886FCA91...  after: CA404C15...
+>>> PASS: new session id on every login
+$ mtls clients/test-022122/alice-new -H Cookie: __Host-SID=886FCA91C0F66FF309723754839AAF8D https://localhost:8443/api/me
+HTTP/2 401 
+{"error":"not_authenticated","message":"No session: POST /api/login first."}
+>>> PASS: the previous session id is dead
+$ mtls clients/test-022122/alice-new -H Cookie: __Host-SID=ATTACKERCHOSENSESSIONID0000000000 -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=91BC51A0A46760DA391E83DEDA7679EF; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"alice-022122","admin":false,"message":"Logged in with client certificate CN=alice-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"337390C4E9CF38709025E303679629E9"}
+>>> PASS: a fresh session id is issued
+>>> PASS: an attacker-chosen session id is not adopted
+
+==================================================================
+10. Cookie flags
+==================================================================
+$ bash -c curl -sS -i --cacert pki/out/root-ca/ca.crt --cert clients/test-022122/alice-new/cert.pem --key clients/test-022122/alice-new/key.pem -X POST https://localhost:8443/api/login -H 'Content-Type: application/json' -d '{}' | grep -i set-cookie
+set-cookie: __Host-SID=E0C6666ABAB4BC96E95BB89085C09373; Path=/; Secure; HttpOnly; SameSite=Strict
+>>> PASS: cookie is Secure
+>>> PASS: cookie is HttpOnly
+>>> PASS: cookie is SameSite=Strict
+>>> PASS: cookie uses the __Host- prefix (no Domain, Path=/)
+
+==================================================================
+11. Stolen session cookie used with another certificate (session bound to the certificate)
+==================================================================
+$ mtls clients/test-022122/alice-new -H Cookie: __Host-SID=4ADA611899966BA0A3D36E0A4B7FBC3B https://localhost:8443/api/me
+HTTP/2 401 
+{"error":"session_certificate_mismatch","message":"This session belongs to another certificate."}
+>>> PASS: stolen cookie is useless without the matching private key
+(the backend also invalidated carol's session: a cookie seen with a foreign certificate is treated as stolen)
+
+==================================================================
+12. Administration requires role ADMIN and a certificate with OU=admins
+==================================================================
+$ mtls clients/test-022122/carol -b clients/test-022122/carol.jar https://localhost:8443/api/admin/users
+HTTP/2 403 
+{"error":"admin_required","message":"An administrator certificate (OU=admins) is required."}
+>>> PASS: non-admin is denied
+
+==================================================================
+13. Group revocation (OU=interns)
+==================================================================
+$ admin https://localhost:8443/api/admin/groups
+{"admins":1,"contractors":0,"interns":2,"staff":3,"uitest":0}
+$ admin -X POST https://localhost:8443/api/admin/groups/interns/revoke -d {"reason":"AFFILIATION_CHANGED","disableAccount":true}
+{"revokedCertificates":2,"affectedAccounts":4,"accountsDisabled":true}
+>>> PASS: group revoked
+$ mtls clients/test-022122/carol -b clients/test-022122/carol.jar https://localhost:8443/api/me
+HTTP/2 403 
+{"error":"certificate_revoked","message":"This certificate has been revoked."}
+>>> PASS: member session killed immediately
+$ mtls clients/test-022122/bob-new -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 403 
+{"error":"client_certificate_rejected","reason":"FAILED:certificate revoked"}
+>>> PASS: member certificate rejected at TLS level
+
+==================================================================
+14. Proxy / transport hardening
+==================================================================
+$ req -H X-Auth-Listener: mtls -H X-SSL-Client-Verify: SUCCESS -H X-SSL-Client-Cert: x https://localhost:9443/api/me
+HTTP/2 404 
+{"error":"not_found","message":"Not found."}
+>>> PASS: spoofed certificate headers on the public listener are useless
+$ bash -c curl -sS -m 3 http://localhost:8080/ 2>&1 | head -1
+curl: (7) Failed to connect to localhost port 8080 after 0 ms: Connection refused
+>>> PASS: backend port is not published
+$ bash -c openssl s_client -connect localhost:8443 -tls1_2 -CAfile pki/out/root-ca/ca.crt </dev/null 2>&1 | grep -iE 'alert|error|Cipher' | head -3
+807B4368917F0000:error:0A00042E:SSL routines:ssl3_read_bytes:tlsv1 alert protocol version:../ssl/record/rec_layer_s3.c:1593:SSL alert number 70
+New, (NONE), Cipher is (NONE)
+    Cipher    : 0000
+>>> PASS: TLS 1.2 is refused
+$ bash -c openssl s_client -connect localhost:8443 -CAfile pki/out/root-ca/ca.crt -cert clients/admin/cert.pem -key clients/admin/key.pem </dev/null 2>&1 | grep -E 'Protocol|Cipher is|Verification:|Acceptable client certificate CA names' -A1 | head -8
+Acceptable client certificate CA names
+O = ITSM mTLS Lab, OU = Users, CN = ITSM mTLS Users CA
+--
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Server public key is 256 bit
+>>> PASS: TLS 1.3 negotiated
+
+==================================================================
+15. CSRF defences on state-changing requests
+==================================================================
+$ mtls clients/admin -b clients/test-022122/admin.jar -X POST https://localhost:8443/api/admin/crl/publish -H Content-Type: application/json -H Origin: https://evil.example -d {}
+HTTP/2 403 
+{"error":"bad_origin","message":"Origin not allowed."}
+>>> PASS: foreign Origin rejected
+$ mtls clients/admin -b clients/test-022122/admin.jar -X POST https://localhost:8443/api/admin/crl/publish -H Content-Type: text/plain -d {}
+HTTP/2 415 
+{"error":"unsupported_media_type","message":"Use Content-Type: application/json."}
+>>> PASS: non-JSON body (HTML form) rejected
+
+==================================================================
+16. Second device (backup authentication method)
+==================================================================
+serial  : 4B3241D58DD463221D3D00D6652E8253
+subject : CN=alice-022122,OU=staff,O=ITSM mTLS Lab
+expires : 2027-05-09T00:22:00Z
+message : Certificate issued for the additional device.
+PKCS#12 : clients/test-022122/alice-phone/client.p12 (password from $P12_PASSWORD)
+$ mtls clients/test-022122/alice-phone -X POST https://localhost:8443/api/login -H Content-Type: application/json -d {}
+HTTP/2 200 
+set-cookie: __Host-SID=9CFCC9E3B404BF623890EA78FF6DFF6E; Path=/; Secure; HttpOnly; SameSite=Strict
+{"username":"alice-022122","admin":false,"message":"Logged in with client certificate CN=alice-022122,OU=staff,O=ITSM mTLS Lab","group":"staff","certificateSerial":"4B3241D58DD463221D3D00D6652E8253"}
+>>> PASS: second certificate logs into the same account
+
+==================================================================
+17. Audit trail (latest events)
+==================================================================
+2026-11-10T00:21:51 RECOVERY_COMPLETED       SUCCESS  bob-022122         method=RECOVERY_MAGIC_LINK revoked=1
+2026-11-10T00:21:51 RECOVERY_FAILED          FAILURE  -                  method=magic_link invalid, expired or used token
+2026-11-10T00:21:51 RECOVERY_LINK_REQUESTED  FAILURE  admin              not eligible for e-mail recovery
+2026-11-10T00:21:52 RECOVERY_FAILED          FAILURE  carol-022122       method=backup_code
+2026-11-10T00:21:53 RECOVERY_FAILED          FAILURE  carol-022122       method=backup_code
+2026-11-10T00:21:54 RECOVERY_FAILED          FAILURE  carol-022122       method=backup_code
+2026-11-10T00:21:54 RECOVERY_FAILED          FAILURE  carol-022122       method=backup_code
+2026-11-10T00:21:55 RECOVERY_FAILED          FAILURE  carol-022122       method=backup_code
+2026-11-10T00:21:55 RATE_LIMITED             DENIED   carol-022122       scope=recovery-account
+2026-11-10T00:21:55 RATE_LIMITED             DENIED   carol-022122       scope=recovery-account
+2026-11-10T00:21:55 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+2026-11-10T00:21:56 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+2026-11-10T00:21:56 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+2026-11-10T00:21:56 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+2026-11-10T00:21:56 LOGIN_SUCCESS            SUCCESS  carol-022122       admin=false
+2026-11-10T00:21:56 SESSION_REJECTED         DENIED   alice-022122       session cookie presented with a different client certificate
+2026-11-10T00:21:56 LOGIN_SUCCESS            SUCCESS  carol-022122       admin=false
+2026-11-10T00:21:56 ADMIN_ACCESS_DENIED      DENIED   carol-022122       GET /api/admin/users
+2026-11-10T00:21:56 CERTIFICATE_REVOKED      SUCCESS  carol-022122       reason=AFFILIATION_CHANGED by=admin admin (group interns)
+2026-11-10T00:21:56 CERTIFICATE_REVOKED      SUCCESS  bob-022122         reason=AFFILIATION_CHANGED by=admin admin (group interns)
+2026-11-10T00:21:56 GROUP_REVOKED            SUCCESS  -                  group=interns by=admin reason=AFFILIATION_CHANGED revoked=2 accounts=4 disabled=true
+2026-11-10T00:21:56 SESSION_REJECTED         DENIED   carol-022122       certificate revoked (application-level revocation list)
+2026-11-10T00:22:00 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+2026-11-10T00:22:00 CERTIFICATE_ISSUED       SUCCESS  alice-022122       via=ADDITIONAL_DEVICE label=alice-phone
+2026-11-10T00:22:00 LOGIN_SUCCESS            SUCCESS  alice-022122       admin=false
+
+==================================================================
+SUMMARY
+==================================================================
+PASS  no certificate is rejected (403 client_certificate_required)
+PASS  foreign CA is rejected by nginx
+PASS  expired certificate is rejected
+PASS  certificate accepted before revocation
+PASS  revoked certificate rejected by the application (before CRL reload)
+PASS  revoked certificate rejected by nginx (CRL)
+PASS  wrong EKU rejected by nginx
+PASS  certificate without EKU rejected by the backend
+PASS  new certificate works after recovery
+PASS  old session invalidated after recovery
+PASS  a backup code works only once
+PASS  same answer whether the e-mail exists or not
+PASS  magic link completes the reset
+PASS  magic link is single use
+PASS  brute force on backup codes is throttled (429 + Retry-After)
+PASS  new session id on every login
+PASS  the previous session id is dead
+PASS  a fresh session id is issued
+PASS  an attacker-chosen session id is not adopted
+PASS  cookie is Secure
+PASS  cookie is HttpOnly
+PASS  cookie is SameSite=Strict
+PASS  cookie uses the __Host- prefix (no Domain, Path=/)
+PASS  stolen cookie is useless without the matching private key
+PASS  non-admin is denied
+PASS  group revoked
+PASS  member session killed immediately
+PASS  member certificate rejected at TLS level
+PASS  spoofed certificate headers on the public listener are useless
+PASS  backend port is not published
+PASS  TLS 1.2 is refused
+PASS  TLS 1.3 negotiated
+PASS  foreign Origin rejected
+PASS  non-JSON body (HTML form) rejected
+PASS  second certificate logs into the same account
+PASS=35 FAIL=0
+Log written to tests/logs/security-test-20261110-022122.log
