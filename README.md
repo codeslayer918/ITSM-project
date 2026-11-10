@@ -162,7 +162,7 @@ All of them generate the key pair **locally** and only send a CSR.
   recovery requested/completed/failed, rate limiting, denied admin access, CRL publication.
   Codes, tokens, session ids and keys are never logged.
 
-### Known limitations (to be honest about in the report)
+### Known limitations
 - Rate-limit counters and sessions are in memory (single backend instance; reset on restart).
 - nginx completes the TLS handshake and then answers 403 when the certificate is missing or
   invalid (`$ssl_client_verify` is reported in the JSON body); it cannot abort the handshake itself.
@@ -187,13 +187,11 @@ All of them generate the key pair **locally** and only send a CSR.
 
 | File | Content |
 |---|---|
-| [Explanation.md](Explanation.md) | The whole project explained from A to Z (concepts, flows, code, demo, FAQ) |
-| [ManualTest.md](ManualTest.md) | Step-by-step manual test guide: commands, expected results and what each step proves |
-| [BuilderPart.md](BuilderPart.md), [BreakerPart.md](BreakerPart.md), [WriterPart.md](WriterPart.md) | What each role produced and how to present it |
+| [DEMO.md](DEMO.md) | Step-by-step demo guide: preparation, commands, expected results and explanations |
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | STRIDE threat model of the login and recovery flows |
 | [docs/ASVS-CHECKLIST.md](docs/ASVS-CHECKLIST.md) | OWASP ASVS 5.0 Level 1 checklist, V6 and V7 |
 | [docs/TEST-LOG.md](docs/TEST-LOG.md) | Commented security test log and findings |
-| [docs/ITSM-mTLS-Report.docx](docs/ITSM-mTLS-Report.docx) | The project report (sources in `docs/report/`) |
+| [docs/ITSM-mTLS-Report.pdf](docs/ITSM-mTLS-Report.pdf) | The project report |
 
 ## Repository layout
 
@@ -203,4 +201,5 @@ nginx/      nginx image: TLS / mTLS configuration template, CRL watcher
 backend/    Spring Boot application (Java 21, Maven)
 scripts/    setup and client-side scripts (key generation, CSR, PKCS#12)
 tests/      security test harness and logs
+docs/       threat model, ASVS checklist, test log, report
 ```
