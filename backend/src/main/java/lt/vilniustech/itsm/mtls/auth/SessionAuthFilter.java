@@ -55,10 +55,18 @@ public class SessionAuthFilter extends OncePerRequestFilter {
         this.absoluteTimeout = props.sessionAbsoluteTimeout();
     }
 
+    /**
+     * Fail closed: every /api/ path needs a session, except this explicit list of endpoints that
+     * work without one (login itself, enrolment and recovery). ProxyGatewayFilter has already
+     * refused non-canonical paths, so the raw URI is the path Spring MVC routes on.
+     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !(path.startsWith("/api/me") || path.startsWith("/api/admin") || path.equals("/api/logout"));
+        if (!path.startsWith("/api/")) {
+            return true;                                  // static pages, CRL, CA chain
+        }
+        return path.equals("/api/login") || path.equals("/api/enroll") || path.startsWith("/api/recovery/");
     }
 
     @Override

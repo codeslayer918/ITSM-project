@@ -22,4 +22,17 @@ public record AuthContext(
         }
         throw ApiException.unauthorized("not_authenticated", "Authentication required.");
     }
+
+    /**
+     * Same as {@link #require} and also checks the admin flag (role ADMIN and OU=admins).
+     * Defence in depth: SessionAuthFilter already enforces it for /api/admin/**, but every admin
+     * handler checks again, so a routing mismatch can never expose admin data.
+     */
+    public static AuthContext requireAdmin(HttpServletRequest request) {
+        AuthContext auth = require(request);
+        if (!auth.admin()) {
+            throw ApiException.forbidden("admin_required", "An administrator certificate (OU=admins) is required.");
+        }
+        return auth;
+    }
 }
